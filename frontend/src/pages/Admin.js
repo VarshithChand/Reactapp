@@ -1,22 +1,16 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../App.css";
 
 const BASE = "http://127.0.0.1:5000";
 
-function fileIcon(name) {
-  const ext = name.split(".").pop().toLowerCase();
-  if (["pdf"].includes(ext)) return "📄";
-  if (["png","jpg","jpeg","gif","webp"].includes(ext)) return "🖼";
-  if (["doc","docx"].includes(ext)) return "📝";
-  return "📁";
-}
-
 function Admin() {
   const navigate = useNavigate();
-  const adminUsername = localStorage.getItem("username");
-
   const [users, setUsers] = useState([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [showCreateUser, setShowCreateUser] = useState(true);
+  const [userView, setUserView] = useState("approved");
+  const [userSearch, setUserSearch] = useState("");
   const [form, setForm] = useState({
     name: "",
     email: "",
@@ -24,27 +18,31 @@ function Admin() {
     password: "",
   });
 
-  const [file, setFile] = useState(null);
-  const [files, setFiles] = useState([]);
-  const [usersLoaded, setUsersLoaded] = useState(false);
-  const [showCreateUser, setShowCreateUser] = useState(true);
-
-  useEffect(() => {
-    if (!localStorage.getItem("isAdmin")) navigate("/login");
-    else fetchFiles();
-  }, [navigate]);
-
-  // ================= USER =================
-
   const fetchUsers = async () => {
-    const res = await fetch(`${BASE}/api/users`);
-    setUsers(await res.json());
-    setUsersLoaded(true);
-    setShowCreateUser(false);
+    try {
+      const res = await fetch(`${BASE}/api/users`);
+      const data = await res.json();
+      setUsers(data);
+      setUsersLoaded(true);
+      setShowCreateUser(false);
+    } catch (err) {
+      console.error("Error fetching users:", err);
+    }
   };
 
-  const handleChange = (e) =>
+  useEffect(() => {
+    const username = localStorage.getItem("username");
+    if (!username) {
+      navigate("/login");
+      return;
+    }
+
+    fetchUsers();
+  }, [navigate]);
+
+  const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
+  };
 
   const createUser = async () => {
     if (!form.name || !form.email || !form.contact || !form.password) {
@@ -54,10 +52,8 @@ function Admin() {
 
     await fetch(`${BASE}/api/register`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(form),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...form, is_approved: true }),
     });
 
     alert("User created!");
@@ -88,47 +84,23 @@ function Admin() {
     alert("Password updated!");
   };
 
-  // ================= FILE =================
-
-  const uploadFile = async () => {
-    if (!file) {
-      alert("Select a file first");
-      return;
-    }
-
-    const fd = new FormData();
-    fd.append("file", file);
-
-    // 🔥 IMPORTANT (send username)
-    fd.append("username", localStorage.getItem("username"));
-
-    await fetch(`${BASE}/api/upload`, {
-      method: "POST",
-      body: fd,
+  const approveUser = async (id) => {
+    await fetch(`${BASE}/api/users/${id}/approve`, {
+      method: "PUT",
     });
 
-    alert("File uploaded!");
-    setFile(null);
-    fetchFiles();
+    fetchUsers();
   };
 
-  const fetchFiles = async () => {
-    const res = await fetch(`${BASE}/api/files`);
-    const data = await res.json();
-    setFiles(data);
-  };
+  const rejectUser = async (id) => {
+    if (!window.confirm("Reject this registration request?")) return;
 
-  const deleteFile = async (filename) => {
-    if (!window.confirm(`Delete ${filename}?`)) return;
-
-    await fetch(`${BASE}/api/files/${filename}`, {
+    await fetch(`${BASE}/api/users/${id}/reject`, {
       method: "DELETE",
     });
 
-    fetchFiles();
+    fetchUsers();
   };
-
-  // ================= LOGOUT =================
 
   const logout = () => {
     localStorage.removeItem("isAdmin");
@@ -136,21 +108,28 @@ function Admin() {
     navigate("/login");
   };
 
-  return (
-    <div className="page-wrapper fade-in">
+  const approvedUsers = users.filter((u) => u.is_admin || u.is_approved);
+  const pendingUsers = users.filter((u) => !u.is_admin && !u.is_approved);
+  const visibleUsers = (userView === "approved" ? approvedUsers : pendingUsers).filter((u) => {
+    const value = `${u.name} ${u.email} ${u.contact}`.toLowerCase();
+    return value.includes(userSearch.toLowerCase().trim());
+  });
 
-      {/* HEADER */}
-      <div className="header flex-between">
-        <h2>👑 Admin Panel</h2>
-        <button className="danger-btn w-auto p-12" onClick={logout}>
-          Logout
-        </button>
+  return (
+    <div className="page-wrapper admin-page fade-in">
+      <div className="header flex-between admin-header">
+        <h2>Admin Panel</h2>
+        <div className="admin-nav">
+          <button className="secondary-btn active" onClick={() => navigate("/admin")}>Users</button>
+          <button className="secondary-btn" onClick={() => navigate("/admin/courses")}>Course Access</button>
+          <button className="secondary-btn" onClick={() => navigate("/admin/files")}>Files</button>
+          <button className="danger-btn" onClick={logout}>Logout</button>
+        </div>
       </div>
 
-      {/* CREATE USER SECTION */}
       {showCreateUser && (
-        <div className="container">
-          <h3 className="mb-18">✏️ Create User</h3>
+        <div className="container admin-panel">
+          <h3 className="mb-18">Create User</h3>
 
           <div className="flex-col gap-8">
             {["name", "email", "contact"].map((field) => (
@@ -178,7 +157,7 @@ function Admin() {
 
             <div className="btn-row">
               <button onClick={createUser}>Add User</button>
-              <button className="secondary-btn" onClick={fetchUsers}>
+              <button className="secondary-btn" onClick={() => fetchUsers(true)}>
                 Load Users
               </button>
             </div>
@@ -186,25 +165,70 @@ function Admin() {
         </div>
       )}
 
-      {/* USERS SECTION */}
       {usersLoaded && !showCreateUser && users.length > 0 && (
-        <div className="container">
-          <h3 className="mb-18">👥 Users ({users.length})</h3>
+        <div className="container admin-panel users-panel">
+          <div className="users-toolbar">
+            <div>
+              <h3>Users</h3>
+              <p>{approvedUsers.length} approved, {pendingUsers.length} pending</p>
+            </div>
 
-          <div className="flex-col gap-8" style={{ maxHeight: "500px", overflowY: "auto", paddingRight: "8px" }}>
-            {users.map((u) => (
-              <div className="card" key={u.id}>
-                <div className="card-name">{u.name}</div>
-                <div className="card-meta">📧 {u.email}</div>
-                <div className="card-meta">📱 {u.contact}</div>
+            <div className="users-tabs">
+              <button
+                className={userView === "approved" ? "active" : ""}
+                onClick={() => setUserView("approved")}
+              >
+                Approved Users
+              </button>
+              <button
+                className={userView === "pending" ? "active" : ""}
+                onClick={() => setUserView("pending")}
+              >
+                Pending Users
+              </button>
+            </div>
+          </div>
+
+          <div className="users-search-row">
+            <input
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder="Search by name, email, or contact"
+            />
+            <button className="secondary-btn" onClick={() => setUserSearch("")}>
+              Clear
+            </button>
+          </div>
+
+          <div className="admin-users-list">
+            {visibleUsers.length === 0 ? (
+              <div className="empty-state">
+                No {userView === "approved" ? "approved" : "pending"} users found
+              </div>
+            ) : visibleUsers.map((u) => (
+              <div className={`card admin-user-card ${!u.is_admin && !u.is_approved ? "pending-user" : ""}`} key={u.id}>
+                <div className="user-card-main">
+                  <div>
+                    <div className="card-name">{u.name}</div>
+                    <div className="card-meta">{u.email}</div>
+                    <div className="card-meta">{u.contact}</div>
+                  </div>
+                  <span className={`status-pill ${u.is_admin ? "status-admin" : u.is_approved ? "status-approved" : "status-pending"}`}>
+                    {u.is_admin ? "Admin" : u.is_approved ? "Approved" : "Pending"}
+                  </span>
+                </div>
 
                 <div className="card-actions">
-                  <button className="w-full p-12" onClick={() => changePassword(u.id)}>
-                    Change Password
-                  </button>
-                  <button className="btn-danger w-full p-12" onClick={() => deleteUser(u.id)}>
-                    Delete
-                  </button>
+                  {!u.is_admin && !u.is_approved && (
+                    <>
+                      <button className="approve-btn" onClick={() => approveUser(u.id)}>Approve</button>
+                      <button className="reject-btn" onClick={() => rejectUser(u.id)}>Reject</button>
+                    </>
+                  )}
+                  {(u.is_admin || u.is_approved) && (
+                    <button className="secondary-action-btn" onClick={() => changePassword(u.id)}>Change Password</button>
+                  )}
+                  <button className="delete-action-btn" onClick={() => deleteUser(u.id)}>Delete</button>
                 </div>
               </div>
             ))}
@@ -217,74 +241,6 @@ function Admin() {
           </div>
         </div>
       )}
-
-      {/* FILE UPLOAD SECTION */}
-      <div className="container">
-        <h3 className="mb-18">📤 Upload File</h3>
-
-        <div className="flex-col gap-8">
-          <div className="input-group">
-            <label>Select File</label>
-            <input 
-              type="file" 
-              onChange={(e) => setFile(e.target.files[0])}
-              className="w-full"
-            />
-          </div>
-
-          <div className="btn-row">
-            <button onClick={uploadFile}>Upload</button>
-            <button className="secondary-btn" onClick={fetchFiles}>
-              Refresh
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* FILES SECTION */}
-      {(() => {
-        const adminFiles = files.filter(f => f.uploaded_by === adminUsername);
-        return adminFiles.length > 0 && (
-          <div>
-            <h3 className="section-label mb-12">📁 Files ({adminFiles.length})</h3>
-
-            <div className="flex-col gap-8">
-              {adminFiles.map((f, i) => (
-              <div className="file-card" key={i}>
-                <div className="file-icon">{fileIcon(f.filename)}</div>
-
-                <div className="file-info">
-                  <div className="fname">{f.filename}</div>
-                  <div className="fmeta">Uploaded by {f.uploaded_by || "Unknown"}</div>
-                </div>
-
-                <div className="file-links">
-                  <a
-                    href={`${BASE}/uploads/${encodeURIComponent(f.filename)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View
-                  </a>
-                  <a
-                    href={`${BASE}/api/download/${encodeURIComponent(f.filename)}`}
-                  >
-                    Download
-                  </a>
-                </div>
-
-                <button
-                  className="btn-danger p-12"
-                  onClick={() => deleteFile(f.filename)}
-                >
-                  Delete
-                </button>
-              </div>
-            ))}
-            </div>
-          </div>
-        );
-      })()}
     </div>
   );
 }
