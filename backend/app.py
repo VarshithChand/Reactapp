@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
 import os
+import time
 from uuid import uuid4
 from werkzeug.utils import secure_filename
 
@@ -9,8 +10,8 @@ app = Flask(__name__)
 CORS(app)
 
 # 🔗 Database
-DATABASE_URL =  "postgresql://postgres:150711@localhost:5432/postgres"
-engine = create_engine(DATABASE_URL)
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:150711@db:5432/myapp")
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # 📂 Upload folder
 UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
@@ -57,26 +58,44 @@ def ensure_schema():
         """))
 
 
-ensure_schema()
+def init_db(retries: int = 30, delay: int = 2):
+    for attempt in range(retries):
+        try:
+            with engine.connect() as conn:
+                # successful connection
+                break
+        except Exception:
+            time.sleep(delay)
+    else:
+        print("Could not connect to the database after retries.")
+        return
+
+    try:
+        ensure_schema()
+
+        # CREATE DEFAULT ADMIN
+        with engine.begin() as conn:
+            admin_exists = conn.execute(
+                text("SELECT * FROM users WHERE name='admin'")
+            ).fetchone()
+
+            if not admin_exists:
+                conn.execute(
+                    text("""
+                        INSERT INTO users
+                        (name, email, contact, password, is_admin, is_approved)
+                        VALUES
+                        ('admin', 'admin@test.com', '9999999999', 'admin123', TRUE, TRUE)
+                    """)
+                )
+
+        print("Admin user ready ✅")
+    except Exception as e:
+        print("Error initializing DB:", e)
 
 
-# CREATE DEFAULT ADMIN
-with engine.begin() as conn:
-    admin_exists = conn.execute(
-        text("SELECT * FROM users WHERE name='admin'")
-    ).fetchone()
-
-    if not admin_exists:
-        conn.execute(
-            text("""
-                INSERT INTO users
-                (name, email, contact, password, is_admin, is_approved)
-                VALUES
-                ('admin', 'admin@test.com', '9999999999', 'admin123', TRUE, TRUE)
-            """)
-        )
-
-print("Admin user ready ✅")
+# Initialize DB (wait for DB to be ready when running in containers)
+init_db()
 
 # =========================
 # 🔐 USER AUTH
